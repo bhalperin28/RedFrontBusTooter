@@ -4,17 +4,9 @@ import os
 import re
 import requests
 
-s3 = boto3.resource('s3')
-
+from base64 import b64decode
 from datetime import datetime, timedelta, timezone
 from mastodon import Mastodon
-
-mastodon = Mastodon(
-	client_id = os.environ['MASTODON_CLIENT_ID'],
-	client_secret = os.environ['MASTODON_CLIENT_SECRET'],
-	api_base_url = os.environ['MASTODON_SERVER']
-)
-mastodon.log_in(os.environ['MASTODON_EMAIL'], os.environ['MASTODON_PASSWORD'])
 
 VEHICLE_ID = '8628'
 MAP_FILENAME = '/tmp/map.png'
@@ -27,7 +19,12 @@ def muniCase(lineName):
 	return re.sub(r'([0-9])([A-Z])', lambda m: m.group(1) + m.group(2).lower(), lineName.title())	
 
 def event_handler(event, context):
-	url = VEHICLE_MONITORING_ENDPOINT.format(VEHICLE_ID, os.environ['SF_511_API_KEY'])
+	sf511ApiKey = boto3.client('kms').decrypt(
+	    CiphertextBlob=b64decode(os.environ['SF_511_API_KEY']),
+	    EncryptionContext={'LambdaFunctionName': os.environ['AWS_LAMBDA_FUNCTION_NAME']}
+	)['Plaintext'].decode('utf-8')
+	
+	url = VEHICLE_MONITORING_ENDPOINT.format(VEHICLE_ID, sf511ApiKey)
 	r = requests.get(url)
 	r.encoding='utf-8-sig'
 	
@@ -44,6 +41,23 @@ def event_handler(event, context):
 	
 	# lineRef = '19'
 	# lineName = 'Polk'
+
+	mastodonClientSecret = boto3.client('kms').decrypt(
+	    CiphertextBlob=b64decode(os.environ['MASTODON_CLIENT_SECRET']),
+	    EncryptionContext={'LambdaFunctionName': os.environ['AWS_LAMBDA_FUNCTION_NAME']}
+	)['Plaintext'].decode('utf-8')
+	
+	mastodonPassword = boto3.client('kms').decrypt(
+	    CiphertextBlob=b64decode(os.environ['MASTODON_PASSWORD']),
+	    EncryptionContext={'LambdaFunctionName': os.environ['AWS_LAMBDA_FUNCTION_NAME']}
+	)['Plaintext'].decode('utf-8')
+	
+	mastodon = Mastodon(
+		client_id = os.environ['MASTODON_CLIENT_ID'],
+		client_secret = mastodonClientSecret,
+		api_base_url = os.environ['MASTODON_SERVER']
+	)
+	mastodon.log_in(os.environ['MASTODON_EMAIL'], mastodonPassword)
 	
 	mastodonId = mastodon.me()['id']
 	statuses = mastodon.account_statuses(id=mastodonId, exclude_replies=True, exclude_reblogs=True, limit=1)
@@ -58,6 +72,7 @@ def event_handler(event, context):
 		print('No change in route. Exiting')
 		return
 	
+	s3 = boto3.resource('s3')
 	mapImageObject = s3.Object(S3_BUCKET_NAME, lineRef + '.png')
 	mapImageObject.download_file(MAP_FILENAME)
 	mediaPostDict = mastodon.media_post(media_file=MAP_FILENAME, mime_type='image/png', description='A map of the {} {} route'.format(lineRef, lineName))
