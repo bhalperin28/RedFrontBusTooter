@@ -38,9 +38,6 @@ def event_handler(event, context):
 		print(NOT_OPERATING_MSG)
 		return
 	lineName = muniCase(journey['PublishedLineName'])
-	
-	# lineRef = '19'
-	# lineName = 'Polk'
 
 	mastodonClientSecret = boto3.client('kms').decrypt(
 	    CiphertextBlob=b64decode(os.environ['MASTODON_CLIENT_SECRET']),
